@@ -413,10 +413,10 @@ async def get_tracks(
             "live": derived["live"],
             "compilations": derived["compilations"],
             "artists": derived["artists"],
-            # "assets": {
-            #     "album_images": alb_images,
-            #     "artist_images": art_images
-            # }
+            "assets": {
+                "album_covers": alb_images,
+                "artist_images": art_images
+            }
         }
 
     # ----------------------------------------------
@@ -425,10 +425,10 @@ async def get_tracks(
     return {
         "entities": entities,
 
-        # "assets": {
-        #     "album_images": alb_images,
-        #     "artist_images": art_images
-        # }
+        "assets": {
+            "album_covers": alb_images,
+            "artist_images": art_images
+        }
     }
 
 # ----------------------------------------------
@@ -511,17 +511,37 @@ async def get_favorites(
     artists=None,
     albums=None,
     top=None,
+    lyrics=None,
     collections=False
 ):
     session = get_session()
 
-    favorites = session.user.favorites.tracks(
-        limit=8000
-    )
+    alb_images = []
+    art_images = []
+    lyric_object = []
 
-    # filtering unchanged...
+    favorites = session.user.favorites.tracks(limit=8000)
+
+    for track in favorites:
+
+        album = track.album
+        artist = track.artist
+
+        alb_images.append(album.image(160))
+        art_images.append(artist.image(160))
+
+        if lyrics is not None:
+            try: 
+                track_lyric = track.lyrics()
+            except Exception as e:
+                lyrics = []
+                
+            lyrics = track_lyric.text
+
+            lyric_object.append(lyrics)
 
     # -------- FLATTEN --------
+
     entities = flatten_track(favorites)
 
     # -------- SORTING --------
@@ -529,42 +549,40 @@ async def get_favorites(
         ("track.popularity", "desc")
     ]
 
-    entities = sort_items(
-        entities,
-        sort_fields
-    )
+    entities = sort_items(entities,sort_fields)
 
     # -------- LIMIT --------
     if top and isinstance(top, int):
 
-        entities = limit_results(
-            entities,
-            top
-        )
+        entities = limit_results(entities,top)
 
-    # -------- DERIVED COLLECTIONS --------
     if collections:
 
-        derived = build_collections(
-            entities
-        )
+        derived = build_collections(entities)
 
         return {
             "tracks": derived["tracks"],
             "albums": derived["albums"],
             "eps": derived["eps"],
             "live": derived["live"],
-            "compilations":
-                derived["compilations"],
-            "artists":
-                derived["artists"]
+            "compilations": derived["compilations"],
+            "artists": derived["artists"],
+            "assets": {
+                "album_covers": alb_images,
+                "artist_images": art_images
+            }
         }
 
-    # -------- DEFAULT RETURN --------
+    # ----------------------------------------------
+    # RAW ENTITY RETURN
+    # ----------------------------------------------
     return {
-        "entities": entities
+        "entities": favorites,
+        "assets": {
+            "album_covers": alb_images,
+            "artist_images": art_images
+        }
     }
-
 
 # ----------------------------------------------
 #  ALBUM FETCH (ARTIST CATALOG)
@@ -934,10 +952,7 @@ def build_collections(entities):
 
             album_type = album.get("type")
 
-            album_name = (
-                album.get("name", "")
-                .lower()
-            )
+            album_name = album.get("name", "").lower()
 
             # -------- LIVE --------
             if re.search(
@@ -1061,6 +1076,12 @@ def track_to_dict(track):
     }
 
 
+favs = get_favorites(
+    collections=True
+)
+
+print(favs)
+
 # tracks = get_tracks(
 #     ["Radiohead"],
 #     top=True,
@@ -1172,12 +1193,12 @@ def track_to_dict(track):
 # TEST: TRACK → ALBUM RELATIONSHIP INTEGRITY
 # verify all track album_ids map to album entities
 # ----------------------------------------------
-tracks = get_tracks(
-    ["Radiohead"],
-    top=True,
-    limit=True,
-    collections=True
-)
+# tracks = get_tracks(
+#     ["Radiohead"],
+#     top=True,
+#     limit=True,
+#     collections=True
+# )
 
 # entities = tracks["entities"]
 
