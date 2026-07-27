@@ -1,294 +1,253 @@
 # ==============================================
-# server.py
+# server_fastapi.py
+# FastAPI implementation for Music DNA
 # ==============================================
-import json
-import time
-from urllib.parse import parse_qs
-from modules.import_tidal import get_tracks, get_top_tracks, get_albums, get_artist, get_favorites, get_artist_byalbum, get_album_tracks
 
-# ==============================================
-#  CORE ASGI APP  (DO NOT CHANGE)
-# ==============================================
-async def app(scope, receive, send):
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-    """Main ASGI entry point."""
-    if scope["type"] != "http":
-        return
-    try:
-        method = scope.get("method", "GET").upper()
-        path = scope.get("path", "/").strip("/")
-        segments = path.split("/")
-        params = {}
-        query_bytes = scope.get("query_string", b"")
-        # --- Handle OPTIONS preflight ---
-        if method == "OPTIONS":
-            status, data = 200, {"message": "CORS preflight"}
-
-        # --- Default root ---
-        elif method == "GET" and path == "":
-            status, data = 200, {"message": "Server is running"}
-
-        # --- Ignore favicon.ico ---
-        elif method == "GET" and path == "favicon.ico":
-            status, data = 200, {}
-
-        # --- Route handling (EDITABLE VIA match_route / routes) ---
-        else:
-            segments, params, handler = await match_route(path, query_bytes)
-            data = await handler(params)
-            status = 200
-
-        # Send final response
-        # print(data[1])
-        print("Data Received ...")
-        await send_response(send, status, data)
-
-    except Exception as e:
-        status, data = 500, {"error": str(e)}
-
-
-# ---------------- Route Matching Layer ----------------
-# Responsible for:
-# 1. Parsing the incoming URL path and query string.
-# 2. Determining which handler function should be called.
-# 3. Extracting parameters from query strings and optional path segments.
-#
-# Inputs:
-#   - path (str): The URL path from ASGI scope, e.g., "/gettracks"
-#   - query_string (bytes): The raw query string from ASGI scope, e.g., b"artist=Radiohead&album=OK+Computer"
-#
-# Output:
-#   - handler (callable or None): The function to handle the route
-#   - params (dict): Flattened dictionary of parameters to pass to the handler
-
-
-# Scope → tells you everything about the request.
-
-# Receive → lets you read the client’s messages.
-
-# Send → lets you send responses (headers + body) back.
-
-# ASGI is async-first, supports multiple protocols.
-
-# Frameworks like FastAPI make it easy to work with, but the underlying mechanism is exactly what you’ve coded in your echo example.
+from modules.import_tidal import (
+    get_album_tracks,
+    get_albums,
+    get_artist,
+    get_artist_byalbum,
+    get_artist_bytrack,
+    get_favorites,
+    get_top_tracks,
+    get_tracks,
+)
 
 
 # ==============================================
-#  ROUTE MATCHING LAYER  (RARELY CHANGE)
+# FASTAPI APPLICATION
 # ==============================================
-async def match_route(path, query_string: bytes):
-    """
-    Determine which handler and params to use.
-    You usually won't need to edit this.
-    """
-    # Split URL path into segments
-    segments = path.strip("/").split("/")
 
-    # Flatten query string into dict
-    query_params = parse_qs(query_string.decode())
+app = FastAPI()
 
-    # Build numeric segment dictionary
-    segment_dict = {}
-    for i, value in enumerate(segments):
-        segment_dict[str(i + 1)] = value
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # Look up handler
-    route_key = segments[0] if segments else None
-    handler = routes.get(route_key)
-    # print(query_params)
-
-    if not handler:
-        async def fallback(params):
-            return {"error": f"No route for {route_key}"}
-        handler = fallback
-
-    return segment_dict, dict(query_params), handler
 
 # ==============================================
-#  CORE UTILITIES
+# HELPERS
 # ==============================================
-# Shared functions that support request handling and data transformation.
-# Acts as a foundation layer for keeping code consistent and maintainable.
 
 def parameter_splitter(value):
     """
-    Input is always a list from the request layer.
-    This function flattens and splits comma-separated values.
+    Convert a comma-separated query value into a list.
+
+    Examples:
+        None                    -> []
+        "Radiohead"             -> ["Radiohead"]
+        "Radiohead,Portishead"  -> ["Radiohead", "Portishead"]
+
+    A list is also accepted so this remains compatible with older code.
     """
     if not value:
         return []
 
-    result = []
+    if isinstance(value, str):
+        value = [value]
 
-    for item in value or []:
-        result.extend(
-            v.strip() for v in item.split(",") if v.strip()
+    parameters = []
+
+    for item in value:
+        parameters.extend(
+            parameter.strip()
+            for parameter in item.split(",")
+            if parameter.strip()
         )
 
-    return result
+    return parameters
+
+
 
 # ==============================================
-#  HANDLERS (SAFE TO MODIFY / ADD)
+# ROOT ROUTES
 # ==============================================
-# This is for getting user specific information, eventually, favorite artists, favorite albums, but for now tracks is enough
-# Eventually will be used to get playlists
-async def favorites_handler(params):
-    """
-    Example handler for /gettracks?artist={artist}
-    """
-    artist = params.get("artist")
-    album = params.get("album")  
-    top = params.get("top")
 
-    # may be None
-    # return {"handler": "artist_handler", "artist": params.get("artist")}
-    print(f"artist: {artist}, album: {album}, top: {top}")
-    start = time.perf_counter()
-    try:
-        tracks = await get_favorites(artist, album,collections=True)
-    except Exception as e:
-        print("Error in get_tracks:", e)
-        tracks = []
+@app.get("/")
+async def root():
+    return {"message": "Server is running"}
 
-    end = time.perf_counter()
-    print(f"[TIMER] took {end - start:.3f}s")
-    # print(f"tracks are {tracks}")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return {}
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "ok",
+        "service": "music_dna_api",
+    }
+
+
+# ==============================================
+# FAVORITES
+# ==============================================
+
+@app.get("/getfavorites")
+async def favorites_handler(
+    artist=None,
+    album=None,
+    top=False,
+):
+    artist = parameter_splitter(artist)
+    album = parameter_splitter(album)
+
+    print(f"GET FAVORITES | artist={artist} | album={album} | top={top}")
+
+    data = await get_favorites(
+        artist or None,
+        album or None,
+        collections=True,
+    )
+
     return {
         "id": "getfavorites",
-        "data": tracks
+        "data": data,
     }
 
 
-# This is for getting tracks and track information
-async def track_handler(params): 
-    """
-    Example handler for /gettracks?artist={artist}
-    """
-    artist = parameter_splitter(params.get("artist"))
-    album = parameter_splitter(params.get("album"))
-    track = parameter_splitter(params.get("track"))
-    if params.get("top"):
-        top = True
-        limit = 50
+# ==============================================
+# TRACKS
+# ==============================================
+
+@app.get("/gettracks")
+async def track_handler(
+    artist=None,
+    album=None,
+    track=None,
+    top=False,
+    limit=None,
+):
+    artist = parameter_splitter(artist)
+    album = parameter_splitter(album)
+    track = parameter_splitter(track)
+
+    top = str(top).lower() == "true"
+    limit = int(limit) if limit else (50 if top else 100)
+
+    print(f"GET TRACKS | artist={artist} | album={album} | track={track} | top={top} | limit={limit}")
+
+    if top:
+        data = await get_top_tracks(
+            artist,
+            album,
+            limit,
+        )
+
+    elif album and not artist:
+        data = await get_album_tracks(album)
+
+    elif artist:
+        data = await get_tracks(
+            artist,
+            True,
+            limit,
+        )
+
+    elif track:
+        data = await get_tracks(
+            track,
+            False,
+            limit,
+        )
+
     else:
-        top= False
-        limit=100
-    # return {"handler": "artist_handler", "artist": params.get("artist")}
-    print(f"artist: {artist}, album: {album}, track {track}, top: {top}")
-    start = time.perf_counter()
-    try:
-        if top:
-            print("Top")
-            tracks = await get_top_tracks(artist, album, limit)
-        else:
-            if not artist and album:
-                print("albums")
-                tracks = await get_album_tracks(album)
-            elif artist:
-                print("artist")
-                tracks = await get_tracks(artist,True,limit)
-            elif track:
-                print("track")
-                tracks = await get_tracks(track,top,limit)
-            else:
-                tracks = []
-            
-    except Exception as e:
-        print("Error in get_tracks:", e)
-        tracks = []
-    end = time.perf_counter()
-    print(f"[TIMER] took {end - start:.3f}s")
-    # print(f"tracks are {tracks}")
+        data = []
+
     return {
         "id": "gettracks",
-        "data": tracks
+        "data": data,
     }
 
-# This is for getting albums and album information
-async def album_handler(params):
-    """
-    Example handler for /getalbums?artist={artist}&track={tracks}
-    """
-    artist = params.get("artist")
-    album = params.get("album")
-    tracks = params.get("tracks")
-    top = params.get("top")
-    print(f"Artist is ${artist}")
-    try:
-        if artist:
-            albums = await get_albums(artist)
-        elif tracks:
-            albums = await get_albums(tracks)
-    except Exception as e:
-        print("Error in getalbums:", e)
-        albums = []
-    end = time.perf_counter()
-    print(f"[TIMER] took {end - start:.3f}s")
+
+# ==============================================
+# ALBUMS
+# ==============================================
+
+@app.get("/getalbums")
+async def album_handler(
+    artist=None,
+    album=None,
+    tracks=None,
+    top=False,
+):
+    artist = parameter_splitter(artist)
+    album = parameter_splitter(album)
+    tracks = parameter_splitter(tracks)
+
+    print(f"GET ALBUMS | artist={artist} | album={album} | tracks={tracks} | top={top}")
+
+    if artist:
+        data = await get_albums(artist)
+
+    elif tracks:
+        data = await get_albums(tracks)
+
+    elif album:
+        data = await get_albums(album)
+
+    else:
+        data = []
+
     return {
         "id": "getalbums",
-        "data": albums["data"] if isinstance(albums, dict) else albums
+        "data": data,
     }
 
-# This is for getting artist information
-async def artist_handler(params):
-    """
-    Example handler for /getartist?artist={artist}&album={album}&track={track}
-    """
-    artist = params.get("artist")
-    track = params.get("track")
-    album = params.get("album")
-    print(f"Album is {album}, Artist is {artist}, Track is {track}")
-    try:
-        if album is not None:
-            print(f"get_artist_byalbum was called")
-            artists = await get_artist_byalbum(album)
-        elif track is not None:
-            print(f"get_artist_bytrack was called")
-            artists = await get_artist_bytrack(track)
-        elif artist is not None:
-            print(f"get_artist was called")
-            artists = await get_artist(artist)
 
-    except Exception as e:
-        print("Error in getartist:", e)
-        artists = []
+# ==============================================
+# ARTISTS
+# ==============================================
+
+@app.get("/getartist")
+async def artist_handler(
+    artist=None,
+    album=None,
+    track=None,
+):
+    artist = parameter_splitter(artist)
+    album = parameter_splitter(album)
+    track = parameter_splitter(track)
+
+    print(f"GET ARTIST | artist={artist} | album={album} | track={track}")
+
+    if album:
+        data = await get_artist_byalbum(album)
+
+    elif track:
+        data = await get_artist_bytrack(track)
+
+    elif artist:
+        data = await get_artist(artist)
+
+    else:
+        data = []
 
     return {
         "id": "getartist",
-        "data": artists   # always use "data" unless you explicitly return buckets
+        "data": data,
     }
 
 
 # ==============================================
-# 📤 RESPONSE SENDER (DO NOT CHANGE)
+# LOCAL DEVELOPMENT
 # ==============================================
-async def send_response(send, status, data):
-    """Send JSON response with CORS headers."""
-    body = json.dumps(data).encode()
-    headers = [
-        (b"content-type", b"application/json"),
-        (b"access-control-allow-origin", b"*"),
-        (b"access-control-allow-methods", b"GET,POST,OPTIONS"),
-        (b"access-control-allow-headers", b"*"),
-    ]
-    await send({"type": "http.response.start", "status": status, "headers": headers})
-    await send({"type": "http.response.body", "body": body})
-    print("Data sent ...\n")
 
-    # print(body)
-    # print()
-    # print(f"The text is ... ${body}")
+if __name__ == "__main__":
+    import uvicorn
 
-
-
-
-# ==============================================
-#  ROUTES TABLE (EDIT HERE)
-# ==============================================
-routes = {
-    "gettracks": track_handler,
-    "getalbums": album_handler,
-    # Add more routes below:
-    "getartist": artist_handler,
-    "getfavorites": favorites_handler,
-}
+    uvicorn.run(
+        "server_fastapi:app",
+        host="127.0.0.1",
+        port=8000,
+        reload=True,
+    )
